@@ -9,7 +9,9 @@ from PySide6.QtGui import QColor
 
 from ui.modules.base_page import BasePage, BaseDialog
 from data.mock_data import MockData
+from data.models import ReceiveRecord
 from ui.styles import AppStyles
+from datetime import datetime
 
 
 class ReceiveMeterPage(BasePage):
@@ -17,30 +19,14 @@ class ReceiveMeterPage(BasePage):
         super().__init__("收料计量")
         self.records = MockData.get_receive_records()
         self._build_ui()
-        self._load_data()
+        self.refresh_all()
     
     def _build_ui(self):
         main_layout = self.layout()
         
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(16)
-        
-        total_volume = sum(r.receive_volume for r in self.records if r.status == "已完成")
-        completed = sum(1 for r in self.records if r.status == "已完成")
-        pending = sum(1 for r in self.records if r.status in ["待检斤", "待复核"])
-        today_count = sum(1 for r in self.records if r.receive_date == "2026-06-15")
-        
-        card1 = self.create_stat_card("今日收料", f"{today_count} 笔", "今日收料次数", AppStyles.PRIMARY_COLOR)
-        card2 = self.create_stat_card("本月累计", f"{total_volume:.1f} m³", "累计收料量", AppStyles.INFO_COLOR)
-        card3 = self.create_stat_card("已完成", f"{completed} 笔", "历史记录", AppStyles.SUCCESS_COLOR)
-        card4 = self.create_stat_card("待处理", f"{pending} 笔", "需要处理", AppStyles.WARNING_COLOR)
-        
-        stats_row.addWidget(card1, 1)
-        stats_row.addWidget(card2, 1)
-        stats_row.addWidget(card3, 1)
-        stats_row.addWidget(card4, 1)
-        
-        main_layout.addLayout(stats_row)
+        self.stats_row = QHBoxLayout()
+        self.stats_row.setSpacing(16)
+        main_layout.addLayout(self.stats_row)
         
         card, card_layout = self.create_card("进料计量记录")
         
@@ -48,7 +34,7 @@ class ReceiveMeterPage(BasePage):
         
         self.search_input = self.create_search_input("搜索单号、罐号、车牌号、供应商...")
         self.search_input.setFixedWidth(280)
-        self.search_input.textChanged.connect(self._on_search)
+        self.search_input.textChanged.connect(self._apply_filters)
         toolbar_layout.addWidget(self.search_input)
         
         self.date_from = QDateEdit()
@@ -64,6 +50,7 @@ class ReceiveMeterPage(BasePage):
                 background-color: white;
             }}
         """)
+        self.date_from.dateChanged.connect(self._apply_filters)
         toolbar_layout.addWidget(QLabel("从："))
         toolbar_layout.addWidget(self.date_from)
         
@@ -80,6 +67,7 @@ class ReceiveMeterPage(BasePage):
                 background-color: white;
             }}
         """)
+        self.date_to.dateChanged.connect(self._apply_filters)
         toolbar_layout.addWidget(QLabel("至："))
         toolbar_layout.addWidget(self.date_to)
         
@@ -94,7 +82,7 @@ class ReceiveMeterPage(BasePage):
                 background-color: white;
             }}
         """)
-        self.filter_combo.currentIndexChanged.connect(self._on_filter)
+        self.filter_combo.currentIndexChanged.connect(self._apply_filters)
         toolbar_layout.addWidget(self.filter_combo)
         
         toolbar_layout.addStretch()
@@ -118,7 +106,29 @@ class ReceiveMeterPage(BasePage):
         
         main_layout.addWidget(card)
     
-    def _load_data(self):
+    def _rebuild_stats(self):
+        while self.stats_row.count():
+            item = self.stats_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        today = QDate.currentDate().toString("yyyy-MM-dd")
+        total_volume = sum(r.receive_volume for r in self.records if r.status == "已完成")
+        completed = sum(1 for r in self.records if r.status == "已完成")
+        pending = sum(1 for r in self.records if r.status in ["待检斤", "待复核"])
+        today_count = sum(1 for r in self.records if r.receive_date == today)
+        
+        card1 = self.create_stat_card("今日收料", f"{today_count} 笔", "今日收料次数", AppStyles.PRIMARY_COLOR)
+        card2 = self.create_stat_card("本月累计", f"{total_volume:.1f} m³", "累计收料量", AppStyles.INFO_COLOR)
+        card3 = self.create_stat_card("已完成", f"{completed} 笔", "历史记录", AppStyles.SUCCESS_COLOR)
+        card4 = self.create_stat_card("待处理", f"{pending} 笔", "需要处理", AppStyles.WARNING_COLOR)
+        
+        self.stats_row.addWidget(card1, 1)
+        self.stats_row.addWidget(card2, 1)
+        self.stats_row.addWidget(card3, 1)
+        self.stats_row.addWidget(card4, 1)
+    
+    def _rebuild_table(self):
         self.table.setRowCount(0)
         status_map = {
             "已完成": "normal",
@@ -143,40 +153,91 @@ class ReceiveMeterPage(BasePage):
             ]
             self.add_table_row(self.table, row_data, status_col=10, status_type_map=status_map)
     
-    def _on_search(self, text):
-        text = text.lower()
-        for row in range(self.table.rowCount()):
-            match = False
-            for col in range(self.table.columnCount()):
-                item = self.table.item(row, col)
-                if item and text in item.text().lower():
-                    match = True
-                    break
-            self.table.setRowHidden(row, not match)
+    def refresh_all(self):
+        self._rebuild_stats()
+        self._rebuild_table()
+        self._apply_filters()
     
-    def _on_filter(self):
-        filter_text = self.filter_combo.currentText()
+    def _apply_filters(self):
+        search_text = self.search_input.text().lower()
+        status_filter = self.filter_combo.currentText()
+        date_from = self.date_from.date().toString("yyyy-MM-dd")
+        date_to = self.date_to.date().toString("yyyy-MM-dd")
+        
         for row in range(self.table.rowCount()):
-            if filter_text == "全部状态":
-                self.table.setRowHidden(row, False)
-            else:
-                item = self.table.item(row, 10)
-                if item and item.text() == filter_text:
-                    self.table.setRowHidden(row, False)
+            status_match = True
+            if status_filter != "全部状态":
+                status_widget = self.table.cellWidget(row, 10)
+                if status_widget:
+                    status_label = status_widget.findChild(QLabel)
+                    if status_label and status_label.text() != status_filter:
+                        status_match = False
                 else:
-                    self.table.setRowHidden(row, True)
+                    status_match = False
+            
+            date_match = True
+            date_item = self.table.item(row, 5)
+            if date_item:
+                rec_date = date_item.text()
+                if rec_date < date_from or rec_date > date_to:
+                    date_match = False
+            
+            search_match = True
+            if search_text:
+                found = False
+                for col in range(self.table.columnCount()):
+                    if col == 10:
+                        w = self.table.cellWidget(row, col)
+                        if w:
+                            lbl = w.findChild(QLabel)
+                            if lbl and search_text in lbl.text().lower():
+                                found = True
+                                break
+                    else:
+                        item = self.table.item(row, col)
+                        if item and search_text in item.text().lower():
+                            found = True
+                            break
+                search_match = found
+            
+            self.table.setRowHidden(row, not (status_match and date_match and search_match))
+    
+    def _get_selected_record(self):
+        current_row = self.table.currentRow()
+        if current_row < 0:
+            return None
+        orig_indices = []
+        for row in range(self.table.rowCount()):
+            if not self.table.isRowHidden(row):
+                orig_indices.append(row)
+        sorted_idx = sorted(orig_indices)
+        if current_row in sorted_idx:
+            real_idx = sorted_idx.index(current_row)
+            if real_idx < len(self.records):
+                return self.records[real_idx]
+        if current_row < len(self.records):
+            return self.records[current_row]
+        return None
     
     def _on_add(self):
         dialog = ReceiveDialog(self)
         if dialog.exec() == QDialog.Accepted:
-            QMessageBox.information(self, "提示", "收料记录添加成功！")
+            data = dialog.get_data()
+            if data:
+                rec = ReceiveRecord(**data)
+                self.records.insert(0, rec)
+                self.refresh_all()
+                QMessageBox.information(self, "提示", "收料记录添加成功！")
     
     def _on_detail(self):
         current_row = self.table.currentRow()
         if current_row < 0:
             QMessageBox.warning(self, "提示", "请先选择一条记录")
             return
-        record = self.records[current_row]
+        record = self._get_selected_record()
+        if record is None:
+            QMessageBox.warning(self, "提示", "未找到选中的记录")
+            return
         dialog = ReceiveDetailDialog(record, self)
         dialog.exec()
 
@@ -184,13 +245,13 @@ class ReceiveMeterPage(BasePage):
 class ReceiveDialog(BaseDialog):
     def __init__(self, parent=None):
         super().__init__("新增收料记录", parent)
+        self.tanks = MockData.get_storage_tanks()
         self._build_form()
     
     def _build_form(self):
         self.tank_combo = QComboBox()
-        tanks = MockData.get_storage_tanks()
-        for t in tanks:
-            self.tank_combo.addItem(f"{t.id} - {t.name}", t.id)
+        for t in self.tanks:
+            self.tank_combo.addItem(f"{t.id} - {t.name}", t)
         self.tank_combo.setFixedHeight(32)
         self.add_field("目标储罐", self.tank_combo)
         
@@ -205,6 +266,10 @@ class ReceiveDialog(BaseDialog):
         self.driver_edit = QLineEdit()
         self.driver_edit.setFixedHeight(32)
         self.add_field("司机", self.driver_edit)
+        
+        self.operator_edit = QLineEdit()
+        self.operator_edit.setFixedHeight(32)
+        self.add_field("操作人", self.operator_edit)
         
         self.before_spin = QDoubleSpinBox()
         self.before_spin.setRange(0, 100000)
@@ -233,6 +298,47 @@ class ReceiveDialog(BaseDialog):
         self.density_spin.setDecimals(3)
         self.density_spin.setFixedHeight(32)
         self.add_field("密度", self.density_spin)
+        
+        self.remark_edit = QTextEdit()
+        self.remark_edit.setFixedHeight(60)
+        self.add_field("备注", self.remark_edit)
+    
+    def get_data(self):
+        tank_data = self.tank_combo.currentData()
+        if tank_data is None:
+            QMessageBox.warning(self, "提示", "请选择目标储罐")
+            return None
+        if not self.supplier_edit.text().strip():
+            QMessageBox.warning(self, "提示", "请输入供应商")
+            return None
+        
+        now = datetime.now()
+        before = self.before_spin.value()
+        after = self.after_spin.value()
+        receive_vol = max(0.0, after - before)
+        
+        return {
+            "id": f"RC-{now.strftime('%Y%m%d%H%M%S')}",
+            "tank_id": tank_data.id,
+            "tank_name": tank_data.name,
+            "medium": tank_data.medium,
+            "supplier": self.supplier_edit.text().strip(),
+            "vehicle_no": self.vehicle_edit.text().strip(),
+            "driver": self.driver_edit.text().strip(),
+            "receive_date": now.strftime("%Y-%m-%d"),
+            "receive_time": now.strftime("%H:%M"),
+            "before_volume": before,
+            "after_volume": after,
+            "receive_volume": receive_vol,
+            "before_level": 0.0,
+            "after_level": 0.0,
+            "temperature": self.temp_spin.value(),
+            "density": self.density_spin.value(),
+            "operator": self.operator_edit.text().strip() or "当前操作员",
+            "inspector": "",
+            "status": "待检斤",
+            "remark": self.remark_edit.toPlainText().strip(),
+        }
 
 
 class ReceiveDetailDialog(QDialog):
@@ -249,7 +355,8 @@ class ReceiveDetailDialog(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(16)
         
-        status_type = "normal" if self.record.status == "已完成" else "warning"
+        status_type_map = {"已完成": "normal", "待检斤": "warning", "待复核": "info", "已取消": "error"}
+        status_type = status_type_map.get(self.record.status, "warning")
         status_label = QLabel(self.record.status)
         status_label.setAlignment(Qt.AlignCenter)
         status_label.setStyleSheet(AppStyles.get_status_badge_style(status_type))

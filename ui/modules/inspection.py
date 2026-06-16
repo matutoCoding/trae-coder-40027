@@ -10,7 +10,9 @@ from PySide6.QtGui import QColor
 
 from ui.modules.base_page import BasePage, BaseDialog
 from data.mock_data import MockData
+from data.models import InspectionRecord
 from ui.styles import AppStyles
+from datetime import datetime
 
 
 class InspectionPage(BasePage):
@@ -19,30 +21,14 @@ class InspectionPage(BasePage):
         self.records = MockData.get_inspection_records()
         self.lightning_checks = MockData.get_lightning_checks()
         self._build_ui()
-        self._load_data()
+        self.refresh_all()
     
     def _build_ui(self):
         main_layout = self.layout()
         
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(16)
-        
-        total = len(self.records)
-        normal = sum(1 for r in self.records if r.status == "正常")
-        abnormal = sum(1 for r in self.records if r.status == "异常")
-        ongoing = sum(1 for r in self.records if r.status == "进行中")
-        
-        card1 = self.create_stat_card("巡检次数", f"{total} 次", "本月巡检", AppStyles.PRIMARY_COLOR)
-        card2 = self.create_stat_card("正常", f"{normal} 次", "无异常", AppStyles.SUCCESS_COLOR)
-        card3 = self.create_stat_card("异常", f"{abnormal} 次", "需处理", AppStyles.ERROR_COLOR)
-        card4 = self.create_stat_card("进行中", f"{ongoing} 次", "当前巡检", AppStyles.WARNING_COLOR)
-        
-        stats_row.addWidget(card1, 1)
-        stats_row.addWidget(card2, 1)
-        stats_row.addWidget(card3, 1)
-        stats_row.addWidget(card4, 1)
-        
-        main_layout.addLayout(stats_row)
+        self.stats_row = QHBoxLayout()
+        self.stats_row.setSpacing(16)
+        main_layout.addLayout(self.stats_row)
         
         tabs = QTabWidget()
         tabs.setStyleSheet(f"""
@@ -90,13 +76,13 @@ class InspectionPage(BasePage):
         
         self.search_input = self.create_search_input("搜索巡检地点、巡检员...")
         self.search_input.setFixedWidth(280)
-        self.search_input.textChanged.connect(self._on_search)
+        self.search_input.textChanged.connect(self._apply_filters)
         toolbar_layout.addWidget(self.search_input)
         
         self.filter_combo = QComboBox()
         self.filter_combo.addItems(["全部状态", "正常", "异常", "进行中"])
         self.filter_combo.setFixedHeight(32)
-        self.filter_combo.currentIndexChanged.connect(self._on_filter)
+        self.filter_combo.currentIndexChanged.connect(self._apply_filters)
         toolbar_layout.addWidget(self.filter_combo)
         
         toolbar_layout.addStretch()
@@ -141,7 +127,28 @@ class InspectionPage(BasePage):
         
         layout.addWidget(card)
     
-    def _load_data(self):
+    def _rebuild_stats(self):
+        while self.stats_row.count():
+            item = self.stats_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        total = len(self.records)
+        normal = sum(1 for r in self.records if r.status == "正常")
+        abnormal = sum(1 for r in self.records if r.status == "异常")
+        ongoing = sum(1 for r in self.records if r.status == "进行中")
+        
+        card1 = self.create_stat_card("巡检次数", f"{total} 次", "本月巡检", AppStyles.PRIMARY_COLOR)
+        card2 = self.create_stat_card("正常", f"{normal} 次", "无异常", AppStyles.SUCCESS_COLOR)
+        card3 = self.create_stat_card("异常", f"{abnormal} 次", "需处理", AppStyles.ERROR_COLOR)
+        card4 = self.create_stat_card("进行中", f"{ongoing} 次", "当前巡检", AppStyles.WARNING_COLOR)
+        
+        self.stats_row.addWidget(card1, 1)
+        self.stats_row.addWidget(card2, 1)
+        self.stats_row.addWidget(card3, 1)
+        self.stats_row.addWidget(card4, 1)
+    
+    def _rebuild_table(self):
         self.table.setRowCount(0)
         status_map = {
             "正常": "normal",
@@ -181,40 +188,90 @@ class InspectionPage(BasePage):
             ]
             self.add_table_row(self.lightning_table, row_data, status_col=7, status_type_map=lt_status_map)
     
-    def _on_search(self, text):
-        text = text.lower()
-        for row in range(self.table.rowCount()):
-            match = False
-            for col in range(self.table.columnCount()):
-                item = self.table.item(row, col)
-                if item and text in item.text().lower():
-                    match = True
-                    break
-            self.table.setRowHidden(row, not match)
+    def refresh_all(self):
+        self._rebuild_stats()
+        self._rebuild_table()
+        self._apply_filters()
     
-    def _on_filter(self):
-        filter_text = self.filter_combo.currentText()
+    def _apply_filters(self):
+        search_text = self.search_input.text().lower()
+        status_filter = self.filter_combo.currentText()
+        
         for row in range(self.table.rowCount()):
-            if filter_text == "全部状态":
-                self.table.setRowHidden(row, False)
-            else:
-                item = self.table.item(row, 7)
-                if item and item.text() == filter_text:
-                    self.table.setRowHidden(row, False)
+            status_match = True
+            if status_filter != "全部状态":
+                status_widget = self.table.cellWidget(row, 7)
+                if status_widget:
+                    status_label = status_widget.findChild(QLabel)
+                    if status_label and status_label.text() != status_filter:
+                        status_match = False
                 else:
-                    self.table.setRowHidden(row, True)
+                    status_match = False
+            
+            search_match = True
+            if search_text:
+                found = False
+                for col in range(self.table.columnCount()):
+                    if col == 7:
+                        w = self.table.cellWidget(row, col)
+                        if w:
+                            lbl = w.findChild(QLabel)
+                            if lbl and search_text in lbl.text().lower():
+                                found = True
+                                break
+                    else:
+                        item = self.table.item(row, col)
+                        if item and search_text in item.text().lower():
+                            found = True
+                            break
+                search_match = found
+            
+            self.table.setRowHidden(row, not (status_match and search_match))
+    
+    def _get_selected_record(self):
+        current_row = self.table.currentRow()
+        if current_row < 0:
+            return None
+        visible_rows = [r for r in range(self.table.rowCount()) if not self.table.isRowHidden(r)]
+        sorted_visible = sorted(visible_rows)
+        if current_row in sorted_visible:
+            orig_idx = sorted_visible.index(current_row)
+            if orig_idx < len(self.records):
+                return self.records[orig_idx]
+        if current_row < len(self.records):
+            return self.records[current_row]
+        return None
     
     def _on_add_inspection(self):
         dialog = InspectionDialog(self)
         if dialog.exec() == QDialog.Accepted:
-            QMessageBox.information(self, "提示", "巡检记录添加成功！")
+            data = dialog.get_data()
+            if data:
+                now = datetime.now()
+                record = InspectionRecord(
+                    id=f"XJ{now.strftime('%Y%m%d%H%M%S')}",
+                    inspection_date=now.strftime("%Y-%m-%d"),
+                    inspection_time=now.strftime("%H:%M:%S"),
+                    inspector=data["inspector"],
+                    location=data["location"],
+                    check_items=["设备外观", "阀门状态", "压力仪表", "液位计", "消防设施", "安全附件"],
+                    abnormal_items=[],
+                    status="正常",
+                    remark=data["remark"]
+                )
+                self.records.append(record)
+                self.refresh_all()
+                QMessageBox.information(self, "提示", "巡检记录添加成功！")
     
     def _on_inspection_detail(self):
         current_row = self.table.currentRow()
         if current_row < 0:
             QMessageBox.warning(self, "提示", "请先选择一条记录")
             return
-        record = self.records[current_row]
+        record = self._get_selected_record()
+        if record is None:
+            QMessageBox.warning(self, "提示", "未找到选中的记录")
+            return
         dialog = InspectionDetailDialog(record, self)
         dialog.exec()
     
@@ -240,6 +297,16 @@ class InspectionDialog(BaseDialog):
         self.remark_edit = QTextEdit()
         self.remark_edit.setFixedHeight(80)
         self.add_field("备注", self.remark_edit)
+    
+    def get_data(self):
+        if not self.inspector_edit.text().strip():
+            QMessageBox.warning(self, "提示", "巡检员不能为空")
+            return None
+        return {
+            "location": self.location_combo.currentText(),
+            "inspector": self.inspector_edit.text().strip(),
+            "remark": self.remark_edit.toPlainText().strip(),
+        }
 
 
 class InspectionDetailDialog(QDialog):

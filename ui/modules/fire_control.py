@@ -20,30 +20,14 @@ class FireControlPage(BasePage):
         self.drills = MockData.get_emergency_drills()
         self.cofferdams = MockData.get_cofferdam_records()
         self._build_ui()
-        self._load_data()
+        self.refresh_all()
     
     def _build_ui(self):
         main_layout = self.layout()
         
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(16)
-        
-        total_eq = sum(e.quantity for e in self.equipment)
-        normal_eq = sum(e.quantity for e in self.equipment if e.status == "正常")
-        completed_drills = sum(1 for d in self.drills if d.status == "已完成")
-        pending_coffer = sum(1 for c in self.cofferdams if c.status != "正常")
-        
-        card1 = self.create_stat_card("消防设备", f"{total_eq} 件", "设备总数", AppStyles.PRIMARY_COLOR)
-        card2 = self.create_stat_card("设备完好", f"{normal_eq} 件", "正常运行", AppStyles.SUCCESS_COLOR)
-        card3 = self.create_stat_card("应急演练", f"{completed_drills} 次", "本年度", AppStyles.INFO_COLOR)
-        card4 = self.create_stat_card("围堰异常", f"{pending_coffer} 个", "需关注", AppStyles.WARNING_COLOR)
-        
-        stats_row.addWidget(card1, 1)
-        stats_row.addWidget(card2, 1)
-        stats_row.addWidget(card3, 1)
-        stats_row.addWidget(card4, 1)
-        
-        main_layout.addLayout(stats_row)
+        self.stats_row = QHBoxLayout()
+        self.stats_row.setSpacing(16)
+        main_layout.addLayout(self.stats_row)
         
         tabs = QTabWidget()
         tabs.setStyleSheet(f"""
@@ -97,13 +81,13 @@ class FireControlPage(BasePage):
         
         self.search_eq = self.create_search_input("搜索设备名称、位置...")
         self.search_eq.setFixedWidth(240)
-        self.search_eq.textChanged.connect(self._on_search_eq)
+        self.search_eq.textChanged.connect(self._apply_eq_filters)
         toolbar_layout.addWidget(self.search_eq)
         
         self.filter_eq = QComboBox()
         self.filter_eq.addItems(["全部状态", "正常", "不足", "待检"])
         self.filter_eq.setFixedHeight(32)
-        self.filter_eq.currentIndexChanged.connect(self._on_filter_eq)
+        self.filter_eq.currentIndexChanged.connect(self._apply_eq_filters)
         toolbar_layout.addWidget(self.filter_eq)
         
         toolbar_layout.addStretch()
@@ -129,6 +113,17 @@ class FireControlPage(BasePage):
         card, card_layout = self.create_card("围堰积液排放记录")
         
         toolbar, toolbar_layout = self.create_toolbar()
+        
+        self.search_coffer = self.create_search_input("搜索位置、记录编号...")
+        self.search_coffer.setFixedWidth(240)
+        self.search_coffer.textChanged.connect(self._apply_coffer_filters)
+        toolbar_layout.addWidget(self.search_coffer)
+        
+        self.filter_coffer = QComboBox()
+        self.filter_coffer.addItems(["全部状态", "正常", "待处理"])
+        self.filter_coffer.setFixedHeight(32)
+        self.filter_coffer.currentIndexChanged.connect(self._apply_coffer_filters)
+        toolbar_layout.addWidget(self.filter_coffer)
         
         toolbar_layout.addStretch()
         
@@ -174,7 +169,28 @@ class FireControlPage(BasePage):
         
         layout.addWidget(card)
     
-    def _load_data(self):
+    def _rebuild_stats(self):
+        while self.stats_row.count():
+            item = self.stats_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        total_eq = sum(e.quantity for e in self.equipment)
+        normal_eq = sum(e.quantity for e in self.equipment if e.status == "正常")
+        completed_drills = sum(1 for d in self.drills if d.status == "已完成")
+        pending_coffer = sum(1 for c in self.cofferdams if c.status != "正常")
+        
+        card1 = self.create_stat_card("消防设备", f"{total_eq} 件", "设备总数", AppStyles.PRIMARY_COLOR)
+        card2 = self.create_stat_card("设备完好", f"{normal_eq} 件", "正常运行", AppStyles.SUCCESS_COLOR)
+        card3 = self.create_stat_card("应急演练", f"{completed_drills} 次", "本年度", AppStyles.INFO_COLOR)
+        card4 = self.create_stat_card("围堰异常", f"{pending_coffer} 个", "需关注", AppStyles.WARNING_COLOR)
+        
+        self.stats_row.addWidget(card1, 1)
+        self.stats_row.addWidget(card2, 1)
+        self.stats_row.addWidget(card3, 1)
+        self.stats_row.addWidget(card4, 1)
+    
+    def _rebuild_eq_table(self):
         self.eq_table.setRowCount(0)
         eq_status_map = {
             "正常": "normal",
@@ -195,7 +211,8 @@ class FireControlPage(BasePage):
                 eq.status,
             ]
             self.add_table_row(self.eq_table, row_data, status_col=7, status_type_map=eq_status_map)
-        
+    
+    def _rebuild_coffer_table(self):
         self.coffer_table.setRowCount(0)
         coffer_status_map = {
             "正常": "normal",
@@ -215,7 +232,8 @@ class FireControlPage(BasePage):
                 c.status,
             ]
             self.add_table_row(self.coffer_table, row_data, status_col=7, status_type_map=coffer_status_map)
-        
+    
+    def _rebuild_drill_table(self):
         self.drill_table.setRowCount(0)
         drill_status_map = {
             "已完成": "normal",
@@ -238,28 +256,86 @@ class FireControlPage(BasePage):
             ]
             self.add_table_row(self.drill_table, row_data, status_col=8, status_type_map=drill_status_map)
     
-    def _on_search_eq(self, text):
-        text = text.lower()
-        for row in range(self.eq_table.rowCount()):
-            match = False
-            for col in range(self.eq_table.columnCount()):
-                item = self.eq_table.item(row, col)
-                if item and text in item.text().lower():
-                    match = True
-                    break
-            self.eq_table.setRowHidden(row, not match)
+    def _rebuild_tables(self):
+        self._rebuild_eq_table()
+        self._rebuild_coffer_table()
+        self._rebuild_drill_table()
     
-    def _on_filter_eq(self):
-        filter_text = self.filter_eq.currentText()
+    def refresh_all(self):
+        self._rebuild_stats()
+        self._rebuild_tables()
+        self._apply_eq_filters()
+        self._apply_coffer_filters()
+    
+    def _apply_eq_filters(self):
+        search_text = self.search_eq.text().lower()
+        status_filter = self.filter_eq.currentText()
+        
         for row in range(self.eq_table.rowCount()):
-            if filter_text == "全部状态":
-                self.eq_table.setRowHidden(row, False)
-            else:
-                item = self.eq_table.item(row, 7)
-                if item and item.text() == filter_text:
-                    self.eq_table.setRowHidden(row, False)
+            status_match = True
+            if status_filter != "全部状态":
+                status_widget = self.eq_table.cellWidget(row, 7)
+                if status_widget:
+                    status_label = status_widget.findChild(QLabel)
+                    if status_label and status_label.text() != status_filter:
+                        status_match = False
                 else:
-                    self.eq_table.setRowHidden(row, True)
+                    status_match = False
+            
+            search_match = True
+            if search_text:
+                found = False
+                for col in range(self.eq_table.columnCount()):
+                    if col == 7:
+                        w = self.eq_table.cellWidget(row, col)
+                        if w:
+                            lbl = w.findChild(QLabel)
+                            if lbl and search_text in lbl.text().lower():
+                                found = True
+                                break
+                    else:
+                        item = self.eq_table.item(row, col)
+                        if item and search_text in item.text().lower():
+                            found = True
+                            break
+                search_match = found
+            
+            self.eq_table.setRowHidden(row, not (status_match and search_match))
+    
+    def _apply_coffer_filters(self):
+        search_text = self.search_coffer.text().lower()
+        status_filter = self.filter_coffer.currentText()
+        
+        for row in range(self.coffer_table.rowCount()):
+            status_match = True
+            if status_filter != "全部状态":
+                status_widget = self.coffer_table.cellWidget(row, 7)
+                if status_widget:
+                    status_label = status_widget.findChild(QLabel)
+                    if status_label and status_label.text() != status_filter:
+                        status_match = False
+                else:
+                    status_match = False
+            
+            search_match = True
+            if search_text:
+                found = False
+                for col in range(self.coffer_table.columnCount()):
+                    if col == 7:
+                        w = self.coffer_table.cellWidget(row, col)
+                        if w:
+                            lbl = w.findChild(QLabel)
+                            if lbl and search_text in lbl.text().lower():
+                                found = True
+                                break
+                    else:
+                        item = self.coffer_table.item(row, col)
+                        if item and search_text in item.text().lower():
+                            found = True
+                            break
+                search_match = found
+            
+            self.coffer_table.setRowHidden(row, not (status_match and search_match))
     
     def _on_add_eq(self):
         dialog = EquipmentDialog(self)
@@ -274,14 +350,37 @@ class FireControlPage(BasePage):
         if dialog.exec() == QDialog.Accepted:
             QMessageBox.information(self, "提示", "记录添加成功！")
     
+    def _get_selected_coffer(self):
+        current_row = self.coffer_table.currentRow()
+        if current_row < 0:
+            return None
+        visible_rows = [r for r in range(self.coffer_table.rowCount()) if not self.coffer_table.isRowHidden(r)]
+        sorted_visible = sorted(visible_rows)
+        if current_row in sorted_visible:
+            orig_idx = sorted_visible.index(current_row)
+            if orig_idx < len(self.cofferdams):
+                return self.cofferdams[orig_idx]
+        if current_row < len(self.cofferdams):
+            return self.cofferdams[current_row]
+        return None
+    
     def _on_drain_coffer(self):
         current_row = self.coffer_table.currentRow()
         if current_row < 0:
             QMessageBox.warning(self, "提示", "请先选择一条记录")
             return
+        coffer = self._get_selected_coffer()
+        if coffer is None:
+            QMessageBox.warning(self, "提示", "未找到选中的围堰记录")
+            return
         reply = QMessageBox.question(self, "确认", "确认进行围堰积液排放处理？",
                                      QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
+            coffer.status = "正常"
+            coffer.discharge_status = "已排放"
+            self._rebuild_stats()
+            self._rebuild_coffer_table()
+            self._apply_coffer_filters()
             QMessageBox.information(self, "提示", "排放处理操作成功！")
     
     def _on_add_drill(self):

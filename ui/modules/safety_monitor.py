@@ -20,30 +20,14 @@ class SafetyMonitorPage(BasePage):
         self.tanks = MockData.get_storage_tanks()
         self.hot_works = MockData.get_hot_work_permits()
         self._build_ui()
-        self._load_data()
+        self.refresh_all()
     
     def _build_ui(self):
         main_layout = self.layout()
         
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(16)
-        
-        alarm_count = sum(1 for d in self.detectors if d.status == "报警")
-        warning_count = sum(1 for d in self.detectors if d.status == "预警")
-        normal_count = sum(1 for d in self.detectors if d.status == "正常")
-        pending_hotwork = sum(1 for h in self.hot_works if h.status in ["待审批", "进行中"])
-        
-        card1 = self.create_stat_card("气体探测器", f"{len(self.detectors)} 台", "监测设备总数", AppStyles.PRIMARY_COLOR)
-        card2 = self.create_stat_card("正常运行", f"{normal_count} 台", "状态正常", AppStyles.SUCCESS_COLOR)
-        card3 = self.create_stat_card("预警/报警", f"{warning_count + alarm_count} 台", "需关注", AppStyles.ERROR_COLOR)
-        card4 = self.create_stat_card("动火作业", f"{pending_hotwork} 项", "进行中/待审批", AppStyles.WARNING_COLOR)
-        
-        stats_row.addWidget(card1, 1)
-        stats_row.addWidget(card2, 1)
-        stats_row.addWidget(card3, 1)
-        stats_row.addWidget(card4, 1)
-        
-        main_layout.addLayout(stats_row)
+        self.stats_row = QHBoxLayout()
+        self.stats_row.setSpacing(16)
+        main_layout.addLayout(self.stats_row)
         
         tabs = QTabWidget()
         tabs.setStyleSheet(f"""
@@ -218,13 +202,13 @@ class SafetyMonitorPage(BasePage):
         
         self.search_gas = self.create_search_input("搜索位置、类型...")
         self.search_gas.setFixedWidth(240)
-        self.search_gas.textChanged.connect(self._on_search_gas)
+        self.search_gas.textChanged.connect(self._apply_gas_filters)
         toolbar_layout.addWidget(self.search_gas)
         
         self.filter_gas = QComboBox()
         self.filter_gas.addItems(["全部状态", "正常", "预警", "报警"])
         self.filter_gas.setFixedHeight(32)
-        self.filter_gas.currentIndexChanged.connect(self._on_filter_gas)
+        self.filter_gas.currentIndexChanged.connect(self._apply_gas_filters)
         toolbar_layout.addWidget(self.filter_gas)
         
         toolbar_layout.addStretch()
@@ -235,16 +219,10 @@ class SafetyMonitorPage(BasePage):
         
         card_layout.addWidget(toolbar)
         
-        detector_grid = QGridLayout()
-        detector_grid.setSpacing(12)
+        self.detector_container = QGridLayout()
+        self.detector_container.setSpacing(12)
         
-        for i, detector in enumerate(self.detectors):
-            row = i // 4
-            col = i % 4
-            panel = self._create_detector_panel(detector)
-            detector_grid.addWidget(panel, row, col)
-        
-        card_layout.addLayout(detector_grid)
+        card_layout.addLayout(self.detector_container)
         
         layout.addWidget(card)
     
@@ -353,13 +331,13 @@ class SafetyMonitorPage(BasePage):
         
         self.search_hw = self.create_search_input("搜索作业编号、地点、作业类型...")
         self.search_hw.setFixedWidth(280)
-        self.search_hw.textChanged.connect(self._on_search_hw)
+        self.search_hw.textChanged.connect(self._apply_hw_filters)
         toolbar_layout.addWidget(self.search_hw)
         
         self.filter_hw = QComboBox()
         self.filter_hw.addItems(["全部状态", "待审批", "进行中", "已完成", "已取消"])
         self.filter_hw.setFixedHeight(32)
-        self.filter_hw.currentIndexChanged.connect(self._on_filter_hw)
+        self.filter_hw.currentIndexChanged.connect(self._apply_hw_filters)
         toolbar_layout.addWidget(self.filter_hw)
         
         toolbar_layout.addStretch()
@@ -383,7 +361,43 @@ class SafetyMonitorPage(BasePage):
         
         layout.addWidget(card)
     
-    def _load_data(self):
+    def _rebuild_stats(self):
+        while self.stats_row.count():
+            item = self.stats_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        alarm_count = sum(1 for d in self.detectors if d.status == "报警")
+        warning_count = sum(1 for d in self.detectors if d.status == "预警")
+        normal_count = sum(1 for d in self.detectors if d.status == "正常")
+        pending_hotwork = sum(1 for h in self.hot_works if h.status in ["待审批", "进行中"])
+        
+        card1 = self.create_stat_card("气体探测器", f"{len(self.detectors)} 台", "监测设备总数", AppStyles.PRIMARY_COLOR)
+        card2 = self.create_stat_card("正常运行", f"{normal_count} 台", "状态正常", AppStyles.SUCCESS_COLOR)
+        card3 = self.create_stat_card("预警/报警", f"{warning_count + alarm_count} 台", "需关注", AppStyles.ERROR_COLOR)
+        card4 = self.create_stat_card("动火作业", f"{pending_hotwork} 项", "进行中/待审批", AppStyles.WARNING_COLOR)
+        
+        self.stats_row.addWidget(card1, 1)
+        self.stats_row.addWidget(card2, 1)
+        self.stats_row.addWidget(card3, 1)
+        self.stats_row.addWidget(card4, 1)
+    
+    def _rebuild_detector_panels(self):
+        while self.detector_container.count():
+            item = self.detector_container.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        for i, detector in enumerate(self.detectors):
+            row = i // 4
+            col = i % 4
+            panel = self._create_detector_panel(detector)
+            panel.setProperty("detector_location", detector.location)
+            panel.setProperty("detector_type", detector.gas_type)
+            panel.setProperty("detector_status", detector.status)
+            self.detector_container.addWidget(panel, row, col)
+    
+    def _rebuild_hw_table(self):
         self.hw_table.setRowCount(0)
         hw_status_map = {
             "待审批": "warning",
@@ -408,59 +422,124 @@ class SafetyMonitorPage(BasePage):
             ]
             self.add_table_row(self.hw_table, row_data, status_col=9, status_type_map=hw_status_map)
     
-    def _on_search_gas(self, text):
-        pass
+    def refresh_all(self):
+        self._rebuild_stats()
+        self._rebuild_detector_panels()
+        self._rebuild_hw_table()
+        self._apply_gas_filters()
+        self._apply_hw_filters()
     
-    def _on_filter_gas(self):
-        pass
+    def _apply_gas_filters(self):
+        search_text = self.search_gas.text().lower()
+        status_filter = self.filter_gas.currentText()
+        
+        for i in range(self.detector_container.count()):
+            item = self.detector_container.itemAt(i)
+            if not item or not item.widget():
+                continue
+            panel = item.widget()
+            
+            location = panel.property("detector_location") or ""
+            detector_type = panel.property("detector_type") or ""
+            status = panel.property("detector_status") or ""
+            
+            status_match = True
+            if status_filter != "全部状态" and status != status_filter:
+                status_match = False
+            
+            search_match = True
+            if search_text:
+                combined = f"{location} {detector_type}".lower()
+                if search_text not in combined:
+                    search_match = False
+            
+            panel.setHidden(not (status_match and search_match))
     
-    def _on_search_hw(self, text):
-        text = text.lower()
+    def _apply_hw_filters(self):
+        search_text = self.search_hw.text().lower()
+        status_filter = self.filter_hw.currentText()
+        
         for row in range(self.hw_table.rowCount()):
-            match = False
-            for col in range(self.hw_table.columnCount()):
-                item = self.hw_table.item(row, col)
-                if item and text in item.text().lower():
-                    match = True
-                    break
-            self.hw_table.setRowHidden(row, not match)
-    
-    def _on_filter_hw(self):
-        filter_text = self.filter_hw.currentText()
-        for row in range(self.hw_table.rowCount()):
-            if filter_text == "全部状态":
-                self.hw_table.setRowHidden(row, False)
-            else:
-                item = self.hw_table.item(row, 9)
-                if item and item.text() == filter_text:
-                    self.hw_table.setRowHidden(row, False)
+            status_match = True
+            if status_filter != "全部状态":
+                status_widget = self.hw_table.cellWidget(row, 9)
+                if status_widget:
+                    status_label = status_widget.findChild(QLabel)
+                    if status_label and status_label.text() != status_filter:
+                        status_match = False
                 else:
-                    self.hw_table.setRowHidden(row, True)
+                    status_match = False
+            
+            search_match = True
+            if search_text:
+                found = False
+                for col in range(self.hw_table.columnCount()):
+                    if col == 9:
+                        w = self.hw_table.cellWidget(row, col)
+                        if w:
+                            lbl = w.findChild(QLabel)
+                            if lbl and search_text in lbl.text().lower():
+                                found = True
+                                break
+                    else:
+                        item = self.hw_table.item(row, col)
+                        if item and search_text in item.text().lower():
+                            found = True
+                            break
+                search_match = found
+            
+            self.hw_table.setRowHidden(row, not (status_match and search_match))
     
     def _on_apply_hw(self):
         dialog = HotWorkDialog(self)
         if dialog.exec() == QDialog.Accepted:
             QMessageBox.information(self, "提示", "动火作业申请提交成功！")
     
+    def _get_selected_hot_work(self):
+        current_row = self.hw_table.currentRow()
+        if current_row < 0:
+            return None
+        visible_rows = [r for r in range(self.hw_table.rowCount()) if not self.hw_table.isRowHidden(r)]
+        sorted_visible = sorted(visible_rows)
+        if current_row in sorted_visible:
+            orig_idx = sorted_visible.index(current_row)
+            if orig_idx < len(self.hot_works):
+                return self.hot_works[orig_idx]
+        if current_row < len(self.hot_works):
+            return self.hot_works[current_row]
+        return None
+    
     def _on_approve_hw(self):
         current_row = self.hw_table.currentRow()
         if current_row < 0:
             QMessageBox.warning(self, "提示", "请先选择一条待审批的记录")
             return
-        item = self.hw_table.item(current_row, 9)
-        if item and item.text() != "待审批":
+        hw = self._get_selected_hot_work()
+        if hw is None:
+            QMessageBox.warning(self, "提示", "未找到选中的动火作业记录")
+            return
+        if hw.status != "待审批":
             QMessageBox.warning(self, "提示", "只能审批状态为'待审批'的记录")
             return
         reply = QMessageBox.question(self, "审批", "确认批准该动火作业许可？",
                                      QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
+            from datetime import date
+            hw.status = "进行中"
+            hw.approver = "安全总监-当前审批"
+            hw.approve_date = date.today().strftime("%Y-%m-%d")
+            self._rebuild_stats()
+            self._rebuild_hw_table()
+            self._apply_hw_filters()
             QMessageBox.information(self, "提示", "审批通过！")
     
     def _on_hw_detail(self):
         current_row = self.hw_table.currentRow()
         if current_row < 0:
             return
-        hw = self.hot_works[current_row]
+        hw = self._get_selected_hot_work()
+        if hw is None:
+            return
         dialog = HotWorkDetailDialog(hw, self)
         dialog.exec()
 

@@ -10,7 +10,9 @@ from PySide6.QtGui import QColor, QFont
 
 from ui.modules.base_page import BasePage, BaseDialog
 from data.mock_data import MockData
+from data.models import NitrogenSealRecord
 from ui.styles import AppStyles
+from datetime import datetime
 
 
 class NitrogenSealPage(BasePage):
@@ -19,30 +21,14 @@ class NitrogenSealPage(BasePage):
         self.records = MockData.get_nitrogen_seal_records()
         self.tanks = MockData.get_storage_tanks()
         self._build_ui()
-        self._load_data()
+        self.refresh_all()
     
     def _build_ui(self):
         main_layout = self.layout()
         
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(16)
-        
-        nitrogen_tanks = [t for t in self.tanks if t.nitrogen_pressure > 0]
-        normal_count = sum(1 for r in self.records if r.status == "正常")
-        adjust_count = sum(1 for r in self.records if r.status == "调整中")
-        avg_pressure = sum(r.tank_pressure for r in self.records) / len(self.records) if self.records else 0
-        
-        card1 = self.create_stat_card("氮封储罐", f"{len(nitrogen_tanks)} 个", "需氮封保护", AppStyles.PRIMARY_COLOR)
-        card2 = self.create_stat_card("压力正常", f"{normal_count} 个", "氮封系统正常", AppStyles.SUCCESS_COLOR)
-        card3 = self.create_stat_card("调节中", f"{adjust_count} 个", "正在调整压力", AppStyles.WARNING_COLOR)
-        card4 = self.create_stat_card("平均压力", f"{avg_pressure:.4f} MPa", "罐内平均压力", AppStyles.INFO_COLOR)
-        
-        stats_row.addWidget(card1, 1)
-        stats_row.addWidget(card2, 1)
-        stats_row.addWidget(card3, 1)
-        stats_row.addWidget(card4, 1)
-        
-        main_layout.addLayout(stats_row)
+        self.stats_row = QHBoxLayout()
+        self.stats_row.setSpacing(16)
+        main_layout.addLayout(self.stats_row)
         
         monitor_card, monitor_layout = self.create_card("氮封压力实时监控")
         
@@ -65,13 +51,13 @@ class NitrogenSealPage(BasePage):
         
         self.search_input = self.create_search_input("搜索储罐名称...")
         self.search_input.setFixedWidth(240)
-        self.search_input.textChanged.connect(self._on_search)
+        self.search_input.textChanged.connect(self._apply_filters)
         toolbar_layout.addWidget(self.search_input)
         
         self.filter_combo = QComboBox()
         self.filter_combo.addItems(["全部状态", "正常", "调整中", "异常"])
         self.filter_combo.setFixedHeight(32)
-        self.filter_combo.currentIndexChanged.connect(self._on_filter)
+        self.filter_combo.currentIndexChanged.connect(self._apply_filters)
         toolbar_layout.addWidget(self.filter_combo)
         
         toolbar_layout.addStretch()
@@ -177,7 +163,28 @@ class NitrogenSealPage(BasePage):
         
         return panel
     
-    def _load_data(self):
+    def _rebuild_stats(self):
+        while self.stats_row.count():
+            item = self.stats_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        nitrogen_tanks = [t for t in self.tanks if t.nitrogen_pressure > 0]
+        normal_count = sum(1 for r in self.records if r.status == "正常")
+        adjust_count = sum(1 for r in self.records if r.status == "调整中")
+        avg_pressure = sum(r.tank_pressure for r in self.records) / len(self.records) if self.records else 0
+        
+        card1 = self.create_stat_card("氮封储罐", f"{len(nitrogen_tanks)} 个", "需氮封保护", AppStyles.PRIMARY_COLOR)
+        card2 = self.create_stat_card("压力正常", f"{normal_count} 个", "氮封系统正常", AppStyles.SUCCESS_COLOR)
+        card3 = self.create_stat_card("调节中", f"{adjust_count} 个", "正在调整压力", AppStyles.WARNING_COLOR)
+        card4 = self.create_stat_card("平均压力", f"{avg_pressure:.4f} MPa", "罐内平均压力", AppStyles.INFO_COLOR)
+        
+        self.stats_row.addWidget(card1, 1)
+        self.stats_row.addWidget(card2, 1)
+        self.stats_row.addWidget(card3, 1)
+        self.stats_row.addWidget(card4, 1)
+    
+    def _rebuild_table(self):
         self.table.setRowCount(0)
         status_map = {
             "正常": "normal",
@@ -200,33 +207,70 @@ class NitrogenSealPage(BasePage):
             ]
             self.add_table_row(self.table, row_data, status_col=9, status_type_map=status_map)
     
-    def _on_search(self, text):
-        text = text.lower()
-        for row in range(self.table.rowCount()):
-            match = False
-            for col in range(self.table.columnCount()):
-                item = self.table.item(row, col)
-                if item and text in item.text().lower():
-                    match = True
-                    break
-            self.table.setRowHidden(row, not match)
+    def refresh_all(self):
+        self._rebuild_stats()
+        self._rebuild_table()
+        self._apply_filters()
     
-    def _on_filter(self):
-        filter_text = self.filter_combo.currentText()
+    def _apply_filters(self):
+        search_text = self.search_input.text().lower()
+        status_filter = self.filter_combo.currentText()
+        
         for row in range(self.table.rowCount()):
-            if filter_text == "全部状态":
-                self.table.setRowHidden(row, False)
-            else:
-                item = self.table.item(row, 9)
-                if item and item.text() == filter_text:
-                    self.table.setRowHidden(row, False)
+            status_match = True
+            if status_filter != "全部状态":
+                status_widget = self.table.cellWidget(row, 9)
+                if status_widget:
+                    status_label = status_widget.findChild(QLabel)
+                    if status_label and status_label.text() != status_filter:
+                        status_match = False
                 else:
-                    self.table.setRowHidden(row, True)
+                    status_match = False
+            
+            search_match = True
+            if search_text:
+                found = False
+                for col in range(self.table.columnCount()):
+                    if col == 9:
+                        w = self.table.cellWidget(row, col)
+                        if w:
+                            lbl = w.findChild(QLabel)
+                            if lbl and search_text in lbl.text().lower():
+                                found = True
+                                break
+                    else:
+                        item = self.table.item(row, col)
+                        if item and search_text in item.text().lower():
+                            found = True
+                            break
+                search_match = found
+            
+            self.table.setRowHidden(row, not (status_match and search_match))
     
     def _on_add_record(self):
         dialog = NitrogenRecordDialog(self)
         if dialog.exec() == QDialog.Accepted:
-            QMessageBox.information(self, "提示", "压力记录添加成功！")
+            data = dialog.get_data()
+            if data:
+                now = datetime.now()
+                tank = next((t for t in self.tanks if t.id == data["tank_id"]), None)
+                tank_name = tank.name if tank else data["tank_id"]
+                record = NitrogenSealRecord(
+                    id=f"NF{now.strftime('%Y%m%d%H%M%S')}",
+                    tank_id=data["tank_id"],
+                    tank_name=tank_name,
+                    record_date=now.strftime("%Y-%m-%d"),
+                    record_time=now.strftime("%H:%M:%S"),
+                    inlet_pressure=data["inlet_pressure"],
+                    tank_pressure=data["tank_pressure"],
+                    set_pressure=data["set_pressure"],
+                    valve_status=data["valve_status"],
+                    operator=data["operator"],
+                    status="正常" if data["valve_status"] == "正常" else "调整中"
+                )
+                self.records.append(record)
+                self.refresh_all()
+                QMessageBox.information(self, "提示", "压力记录添加成功！")
 
 
 class NitrogenRecordDialog(BaseDialog):
@@ -277,3 +321,16 @@ class NitrogenRecordDialog(BaseDialog):
         self.operator_edit = QLineEdit()
         self.operator_edit.setFixedHeight(32)
         self.add_field("操作人", self.operator_edit)
+    
+    def get_data(self):
+        if not self.operator_edit.text().strip():
+            QMessageBox.warning(self, "提示", "操作人不能为空")
+            return None
+        return {
+            "tank_id": self.tank_combo.currentData(),
+            "inlet_pressure": self.inlet_spin.value(),
+            "tank_pressure": self.tank_spin.value(),
+            "set_pressure": self.set_spin.value(),
+            "valve_status": self.valve_combo.currentText(),
+            "operator": self.operator_edit.text().strip(),
+        }

@@ -2,14 +2,17 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTableWidget, QComboBox, QFrame, QGroupBox, QGridLayout,
     QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
-    QDoubleSpinBox, QDateEdit, QTextEdit, QTabWidget, QWidget
+    QDoubleSpinBox, QDateEdit, QTextEdit, QTabWidget, QWidget,
+    QTableWidgetItem
 )
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor, QBrush
 
 from ui.modules.base_page import BasePage, BaseDialog
 from data.mock_data import MockData
+from data.models import StorageTank
 from ui.styles import AppStyles
+from datetime import datetime
 
 
 class TankLedgerPage(BasePage):
@@ -17,30 +20,14 @@ class TankLedgerPage(BasePage):
         super().__init__("储罐台账")
         self.tanks = MockData.get_storage_tanks()
         self._build_ui()
-        self._load_data()
+        self.refresh_all()
     
     def _build_ui(self):
         main_layout = self.layout()
         
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(16)
-        
-        total_capacity = sum(t.capacity for t in self.tanks)
-        total_current = sum(t.current_volume for t in self.tanks)
-        normal_count = sum(1 for t in self.tanks if t.status == "正常")
-        warn_count = sum(1 for t in self.tanks if t.status != "正常")
-        
-        card1 = self.create_stat_card("储罐总数", f"{len(self.tanks)} 个", "含固定顶、浮顶等", AppStyles.PRIMARY_COLOR)
-        card2 = self.create_stat_card("总容量", f"{total_capacity:.0f} m³", "设计总容量", AppStyles.INFO_COLOR)
-        card3 = self.create_stat_card("当前库存", f"{total_current:.1f} m³", f"占比 {total_current/total_capacity*100:.1f}%", AppStyles.SUCCESS_COLOR)
-        card4 = self.create_stat_card("异常储罐", f"{warn_count} 个", "需关注", AppStyles.WARNING_COLOR)
-        
-        stats_row.addWidget(card1, 1)
-        stats_row.addWidget(card2, 1)
-        stats_row.addWidget(card3, 1)
-        stats_row.addWidget(card4, 1)
-        
-        main_layout.addLayout(stats_row)
+        self.stats_row = QHBoxLayout()
+        self.stats_row.setSpacing(16)
+        main_layout.addLayout(self.stats_row)
         
         card, card_layout = self.create_card("储罐基础台账")
         
@@ -48,7 +35,7 @@ class TankLedgerPage(BasePage):
         
         self.search_input = self.create_search_input("搜索储罐编号、名称、介质...")
         self.search_input.setFixedWidth(280)
-        self.search_input.textChanged.connect(self._on_search)
+        self.search_input.textChanged.connect(self._apply_filters)
         toolbar_layout.addWidget(self.search_input)
         
         self.filter_combo = QComboBox()
@@ -63,7 +50,7 @@ class TankLedgerPage(BasePage):
                 min-height: 24px;
             }}
         """)
-        self.filter_combo.currentIndexChanged.connect(self._on_filter)
+        self.filter_combo.currentIndexChanged.connect(self._apply_filters)
         toolbar_layout.addWidget(self.filter_combo)
         
         toolbar_layout.addStretch()
@@ -91,7 +78,28 @@ class TankLedgerPage(BasePage):
         
         main_layout.addWidget(card)
     
-    def _load_data(self):
+    def _rebuild_stats(self):
+        while self.stats_row.count():
+            item = self.stats_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        total_capacity = sum(t.capacity for t in self.tanks)
+        total_current = sum(t.current_volume for t in self.tanks)
+        normal_count = sum(1 for t in self.tanks if t.status == "正常")
+        warn_count = sum(1 for t in self.tanks if t.status != "正常")
+        
+        card1 = self.create_stat_card("储罐总数", f"{len(self.tanks)} 个", "含固定顶、浮顶等", AppStyles.PRIMARY_COLOR)
+        card2 = self.create_stat_card("总容量", f"{total_capacity:.0f} m³", "设计总容量", AppStyles.INFO_COLOR)
+        card3 = self.create_stat_card("当前库存", f"{total_current:.1f} m³", f"占比 {total_current/total_capacity*100:.1f}%", AppStyles.SUCCESS_COLOR)
+        card4 = self.create_stat_card("异常储罐", f"{warn_count} 个", "需关注", AppStyles.WARNING_COLOR)
+        
+        self.stats_row.addWidget(card1, 1)
+        self.stats_row.addWidget(card2, 1)
+        self.stats_row.addWidget(card3, 1)
+        self.stats_row.addWidget(card4, 1)
+    
+    def _rebuild_table(self):
         self.table.setRowCount(0)
         status_map = {
             "正常": "normal",
@@ -114,50 +122,100 @@ class TankLedgerPage(BasePage):
             ]
             self.add_table_row(self.table, row_data, status_col=8, status_type_map=status_map)
     
-    def _on_search(self, text):
-        text = text.lower()
-        for row in range(self.table.rowCount()):
-            match = False
-            for col in range(self.table.columnCount()):
-                item = self.table.item(row, col)
-                if item and text in item.text().lower():
-                    match = True
-                    break
-            self.table.setRowHidden(row, not match)
+    def refresh_all(self):
+        self._rebuild_stats()
+        self._rebuild_table()
+        self._apply_filters()
     
-    def _on_filter(self):
-        filter_text = self.filter_combo.currentText()
+    def _apply_filters(self):
+        search_text = self.search_input.text().lower()
+        status_filter = self.filter_combo.currentText()
+        
         for row in range(self.table.rowCount()):
-            if filter_text == "全部状态":
-                self.table.setRowHidden(row, False)
-            else:
-                item = self.table.item(row, 8)
-                if item and item.text() == filter_text:
-                    self.table.setRowHidden(row, False)
+            status_match = True
+            if status_filter != "全部状态":
+                status_widget = self.table.cellWidget(row, 8)
+                if status_widget:
+                    status_label = status_widget.findChild(QLabel)
+                    if status_label and status_label.text() != status_filter:
+                        status_match = False
                 else:
-                    self.table.setRowHidden(row, True)
+                    status_match = False
+            
+            search_match = True
+            if search_text:
+                found = False
+                for col in range(self.table.columnCount()):
+                    if col == 8:
+                        w = self.table.cellWidget(row, col)
+                        if w:
+                            lbl = w.findChild(QLabel)
+                            if lbl and search_text in lbl.text().lower():
+                                found = True
+                                break
+                    else:
+                        item = self.table.item(row, col)
+                        if item and search_text in item.text().lower():
+                            found = True
+                            break
+                search_match = found
+            
+            self.table.setRowHidden(row, not (status_match and search_match))
+    
+    def _get_selected_tank(self):
+        current_row = self.table.currentRow()
+        if current_row < 0:
+            return None
+        visible_rows = [r for r in range(self.table.rowCount()) if not self.table.isRowHidden(r)]
+        sorted_visible = sorted(visible_rows)
+        if current_row in sorted_visible:
+            orig_idx = sorted_visible.index(current_row)
+            if orig_idx < len(self.tanks):
+                return self.tanks[orig_idx]
+        if current_row < len(self.tanks):
+            return self.tanks[current_row]
+        return None
     
     def _on_add_tank(self):
         dialog = TankDialog(self)
         if dialog.exec() == QDialog.Accepted:
-            QMessageBox.information(self, "提示", "储罐添加成功！")
+            data = dialog.get_data()
+            if data:
+                tank = StorageTank(**data)
+                self.tanks.append(tank)
+                self.refresh_all()
+                QMessageBox.information(self, "提示", "储罐添加成功！")
     
     def _on_edit_tank(self):
         current_row = self.table.currentRow()
         if current_row < 0:
             QMessageBox.warning(self, "提示", "请先选择一个储罐")
             return
-        tank = self.tanks[current_row]
+        
+        tank = self._get_selected_tank()
+        if tank is None:
+            QMessageBox.warning(self, "提示", "未找到选中的储罐")
+            return
+        
         dialog = TankDialog(self, tank)
         if dialog.exec() == QDialog.Accepted:
-            QMessageBox.information(self, "提示", "储罐信息更新成功！")
+            data = dialog.get_data()
+            if data:
+                for k, v in data.items():
+                    if hasattr(tank, k):
+                        setattr(tank, k, v)
+                self.refresh_all()
+                QMessageBox.information(self, "提示", "储罐信息更新成功！")
     
     def _on_detail(self):
         current_row = self.table.currentRow()
         if current_row < 0:
             QMessageBox.warning(self, "提示", "请先选择一个储罐")
             return
-        tank = self.tanks[current_row]
+        tank = self._get_selected_tank()
+        if tank is None:
+            QMessageBox.warning(self, "提示", "未找到选中的储罐")
+            return
         dialog = TankDetailDialog(tank, self)
         dialog.exec()
 
@@ -222,6 +280,47 @@ class TankDialog(BaseDialog):
         self.location_edit.setText(self.tank.location)
         self.status_combo.setCurrentText(self.tank.status)
         self.desc_edit.setPlainText(self.tank.description)
+    
+    def get_data(self):
+        if not self.id_edit.text().strip() or not self.name_edit.text().strip():
+            QMessageBox.warning(self, "提示", "储罐编号和名称不能为空")
+            return None
+        
+        if self.tank is not None:
+            return {
+                "id": self.id_edit.text().strip(),
+                "name": self.name_edit.text().strip(),
+                "tank_type": self.type_combo.currentText(),
+                "medium": self.medium_edit.text().strip(),
+                "capacity": self.capacity_spin.value(),
+                "material": self.material_edit.text().strip(),
+                "location": self.location_edit.text().strip(),
+                "status": self.status_combo.currentText(),
+                "description": self.desc_edit.toPlainText().strip(),
+            }
+        
+        return {
+            "id": self.id_edit.text().strip(),
+            "name": self.name_edit.text().strip(),
+            "tank_type": self.type_combo.currentText(),
+            "capacity": self.capacity_spin.value(),
+            "material": self.material_edit.text().strip() or "304不锈钢",
+            "medium": self.medium_edit.text().strip(),
+            "location": self.location_edit.text().strip(),
+            "diameter": 10.0,
+            "height": 10.0,
+            "design_pressure": 0.1,
+            "design_temperature": 50.0,
+            "install_date": datetime.now().strftime("%Y-%m-%d"),
+            "last_inspection_date": datetime.now().strftime("%Y-%m-%d"),
+            "status": self.status_combo.currentText(),
+            "current_volume": 0.0,
+            "current_level": 0.0,
+            "current_temperature": 20.0,
+            "current_pressure": 0.05,
+            "nitrogen_pressure": 0.005,
+            "description": self.desc_edit.toPlainText().strip(),
+        }
 
 
 class TankDetailDialog(QDialog):
@@ -311,7 +410,7 @@ class TankDetailDialog(QDialog):
         status_grid.setSpacing(12)
         status_grid.setContentsMargins(16, 12, 16, 12)
         
-        level_percent = self.tank.current_level / self.tank.height * 100
+        level_percent = self.tank.current_level / self.tank.height * 100 if self.tank.height > 0 else 0
         
         status_items = [
             ("当前液位", f"{self.tank.current_level:.2f} m"),
@@ -358,7 +457,6 @@ class TankDetailDialog(QDialog):
             ("2026-06-10", "收料", "+200.0", "李四"),
             ("2026-06-05", "发料", "-120.0", "张工"),
         ]
-        from PySide6.QtWidgets import QTableWidgetItem
         for data in sample_data:
             row = history_table.rowCount()
             history_table.insertRow(row)
