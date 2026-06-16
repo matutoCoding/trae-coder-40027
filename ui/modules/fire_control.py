@@ -19,6 +19,9 @@ class FireControlPage(BasePage):
         self.equipment = MockData.get_fire_equipment()
         self.drills = MockData.get_emergency_drills()
         self.cofferdams = MockData.get_cofferdam_records()
+        self.eq_row_map = []
+        self.coffer_row_map = []
+        self.drill_row_map = []
         self._build_ui()
         self.refresh_all()
     
@@ -192,6 +195,7 @@ class FireControlPage(BasePage):
     
     def _rebuild_eq_table(self):
         self.eq_table.setRowCount(0)
+        self.eq_row_map = []
         eq_status_map = {
             "正常": "normal",
             "不足": "warning",
@@ -199,7 +203,7 @@ class FireControlPage(BasePage):
             "故障": "error",
         }
         
-        for eq in self.equipment:
+        for i, eq in enumerate(self.equipment):
             row_data = [
                 eq.id,
                 eq.name,
@@ -211,16 +215,18 @@ class FireControlPage(BasePage):
                 eq.status,
             ]
             self.add_table_row(self.eq_table, row_data, status_col=7, status_type_map=eq_status_map)
+            self.eq_row_map.append(i)
     
     def _rebuild_coffer_table(self):
         self.coffer_table.setRowCount(0)
+        self.coffer_row_map = []
         coffer_status_map = {
             "正常": "normal",
             "待处理": "warning",
             "已排放": "info",
         }
         
-        for c in self.cofferdams:
+        for i, c in enumerate(self.cofferdams):
             row_data = [
                 c.id,
                 c.record_date,
@@ -232,9 +238,11 @@ class FireControlPage(BasePage):
                 c.status,
             ]
             self.add_table_row(self.coffer_table, row_data, status_col=7, status_type_map=coffer_status_map)
+            self.coffer_row_map.append(i)
     
     def _rebuild_drill_table(self):
         self.drill_table.setRowCount(0)
+        self.drill_row_map = []
         drill_status_map = {
             "已完成": "normal",
             "计划中": "warning",
@@ -242,7 +250,7 @@ class FireControlPage(BasePage):
             "取消": "error",
         }
         
-        for d in self.drills:
+        for i, d in enumerate(self.drills):
             row_data = [
                 d.id,
                 d.drill_name,
@@ -255,6 +263,7 @@ class FireControlPage(BasePage):
                 d.status,
             ]
             self.add_table_row(self.drill_table, row_data, status_col=8, status_type_map=drill_status_map)
+            self.drill_row_map.append(i)
     
     def _rebuild_tables(self):
         self._rebuild_eq_table()
@@ -352,16 +361,11 @@ class FireControlPage(BasePage):
     
     def _get_selected_coffer(self):
         current_row = self.coffer_table.currentRow()
-        if current_row < 0:
+        if current_row < 0 or current_row >= len(self.coffer_row_map):
             return None
-        visible_rows = [r for r in range(self.coffer_table.rowCount()) if not self.coffer_table.isRowHidden(r)]
-        sorted_visible = sorted(visible_rows)
-        if current_row in sorted_visible:
-            orig_idx = sorted_visible.index(current_row)
-            if orig_idx < len(self.cofferdams):
-                return self.cofferdams[orig_idx]
-        if current_row < len(self.cofferdams):
-            return self.cofferdams[current_row]
+        orig_idx = self.coffer_row_map[current_row]
+        if 0 <= orig_idx < len(self.cofferdams):
+            return self.cofferdams[orig_idx]
         return None
     
     def _on_drain_coffer(self):

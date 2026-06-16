@@ -19,6 +19,7 @@ class TankLedgerPage(BasePage):
     def __init__(self):
         super().__init__("储罐台账")
         self.tanks = MockData.get_storage_tanks()
+        self.tank_row_map = []
         self._build_ui()
         self.refresh_all()
     
@@ -101,13 +102,14 @@ class TankLedgerPage(BasePage):
     
     def _rebuild_table(self):
         self.table.setRowCount(0)
+        self.tank_row_map = []
         status_map = {
             "正常": "normal",
             "待检修": "warning",
             "停用": "error"
         }
         
-        for tank in self.tanks:
+        for i, tank in enumerate(self.tanks):
             row_data = [
                 tank.id,
                 tank.name,
@@ -121,6 +123,7 @@ class TankLedgerPage(BasePage):
                 tank.location
             ]
             self.add_table_row(self.table, row_data, status_col=8, status_type_map=status_map)
+            self.tank_row_map.append(i)
     
     def refresh_all(self):
         self._rebuild_stats()
@@ -164,16 +167,11 @@ class TankLedgerPage(BasePage):
     
     def _get_selected_tank(self):
         current_row = self.table.currentRow()
-        if current_row < 0:
+        if current_row < 0 or current_row >= len(self.tank_row_map):
             return None
-        visible_rows = [r for r in range(self.table.rowCount()) if not self.table.isRowHidden(r)]
-        sorted_visible = sorted(visible_rows)
-        if current_row in sorted_visible:
-            orig_idx = sorted_visible.index(current_row)
-            if orig_idx < len(self.tanks):
-                return self.tanks[orig_idx]
-        if current_row < len(self.tanks):
-            return self.tanks[current_row]
+        orig_idx = self.tank_row_map[current_row]
+        if 0 <= orig_idx < len(self.tanks):
+            return self.tanks[orig_idx]
         return None
     
     def _on_add_tank(self):

@@ -19,6 +19,7 @@ class SafetyMonitorPage(BasePage):
         self.detectors = MockData.get_gas_detectors()
         self.tanks = MockData.get_storage_tanks()
         self.hot_works = MockData.get_hot_work_permits()
+        self.hw_row_map = []
         self._build_ui()
         self.refresh_all()
     
@@ -393,12 +394,14 @@ class SafetyMonitorPage(BasePage):
             col = i % 4
             panel = self._create_detector_panel(detector)
             panel.setProperty("detector_location", detector.location)
-            panel.setProperty("detector_type", detector.gas_type)
+            panel.setProperty("detector_type", detector.detector_type)
+            panel.setProperty("detector_gas", detector.gas_type)
             panel.setProperty("detector_status", detector.status)
             self.detector_container.addWidget(panel, row, col)
     
     def _rebuild_hw_table(self):
         self.hw_table.setRowCount(0)
+        self.hw_row_map = []
         hw_status_map = {
             "待审批": "warning",
             "进行中": "info",
@@ -407,7 +410,7 @@ class SafetyMonitorPage(BasePage):
             "已驳回": "error",
         }
         
-        for hw in self.hot_works:
+        for i, hw in enumerate(self.hot_works):
             row_data = [
                 hw.permit_no,
                 hw.work_location,
@@ -421,6 +424,7 @@ class SafetyMonitorPage(BasePage):
                 hw.status,
             ]
             self.add_table_row(self.hw_table, row_data, status_col=9, status_type_map=hw_status_map)
+            self.hw_row_map.append(i)
     
     def refresh_all(self):
         self._rebuild_stats()
@@ -441,6 +445,7 @@ class SafetyMonitorPage(BasePage):
             
             location = panel.property("detector_location") or ""
             detector_type = panel.property("detector_type") or ""
+            detector_gas = panel.property("detector_gas") or ""
             status = panel.property("detector_status") or ""
             
             status_match = True
@@ -449,7 +454,7 @@ class SafetyMonitorPage(BasePage):
             
             search_match = True
             if search_text:
-                combined = f"{location} {detector_type}".lower()
+                combined = f"{location} {detector_type} {detector_gas}".lower()
                 if search_text not in combined:
                     search_match = False
             
@@ -497,16 +502,11 @@ class SafetyMonitorPage(BasePage):
     
     def _get_selected_hot_work(self):
         current_row = self.hw_table.currentRow()
-        if current_row < 0:
+        if current_row < 0 or current_row >= len(self.hw_row_map):
             return None
-        visible_rows = [r for r in range(self.hw_table.rowCount()) if not self.hw_table.isRowHidden(r)]
-        sorted_visible = sorted(visible_rows)
-        if current_row in sorted_visible:
-            orig_idx = sorted_visible.index(current_row)
-            if orig_idx < len(self.hot_works):
-                return self.hot_works[orig_idx]
-        if current_row < len(self.hot_works):
-            return self.hot_works[current_row]
+        orig_idx = self.hw_row_map[current_row]
+        if 0 <= orig_idx < len(self.hot_works):
+            return self.hot_works[orig_idx]
         return None
     
     def _on_approve_hw(self):

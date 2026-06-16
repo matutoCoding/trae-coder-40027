@@ -18,6 +18,7 @@ class ReceiveMeterPage(BasePage):
     def __init__(self):
         super().__init__("收料计量")
         self.records = MockData.get_receive_records()
+        self.record_row_map = []
         self._build_ui()
         self.refresh_all()
     
@@ -130,6 +131,7 @@ class ReceiveMeterPage(BasePage):
     
     def _rebuild_table(self):
         self.table.setRowCount(0)
+        self.record_row_map = []
         status_map = {
             "已完成": "normal",
             "待检斤": "warning",
@@ -137,7 +139,7 @@ class ReceiveMeterPage(BasePage):
             "已取消": "error",
         }
         
-        for record in self.records:
+        for i, record in enumerate(self.records):
             row_data = [
                 record.id,
                 record.tank_name,
@@ -152,6 +154,7 @@ class ReceiveMeterPage(BasePage):
                 record.status,
             ]
             self.add_table_row(self.table, row_data, status_col=10, status_type_map=status_map)
+            self.record_row_map.append(i)
     
     def refresh_all(self):
         self._rebuild_stats()
@@ -204,19 +207,11 @@ class ReceiveMeterPage(BasePage):
     
     def _get_selected_record(self):
         current_row = self.table.currentRow()
-        if current_row < 0:
+        if current_row < 0 or current_row >= len(self.record_row_map):
             return None
-        orig_indices = []
-        for row in range(self.table.rowCount()):
-            if not self.table.isRowHidden(row):
-                orig_indices.append(row)
-        sorted_idx = sorted(orig_indices)
-        if current_row in sorted_idx:
-            real_idx = sorted_idx.index(current_row)
-            if real_idx < len(self.records):
-                return self.records[real_idx]
-        if current_row < len(self.records):
-            return self.records[current_row]
+        orig_idx = self.record_row_map[current_row]
+        if 0 <= orig_idx < len(self.records):
+            return self.records[orig_idx]
         return None
     
     def _on_add(self):

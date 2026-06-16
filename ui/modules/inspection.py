@@ -20,6 +20,8 @@ class InspectionPage(BasePage):
         super().__init__("罐区巡检")
         self.records = MockData.get_inspection_records()
         self.lightning_checks = MockData.get_lightning_checks()
+        self.record_row_map = []
+        self.lightning_row_map = []
         self._build_ui()
         self.refresh_all()
     
@@ -150,13 +152,14 @@ class InspectionPage(BasePage):
     
     def _rebuild_table(self):
         self.table.setRowCount(0)
+        self.record_row_map = []
         status_map = {
             "正常": "normal",
             "异常": "error",
             "进行中": "warning",
         }
         
-        for record in self.records:
+        for i, record in enumerate(self.records):
             row_data = [
                 record.id,
                 record.inspection_date,
@@ -168,14 +171,16 @@ class InspectionPage(BasePage):
                 record.status,
             ]
             self.add_table_row(self.table, row_data, status_col=7, status_type_map=status_map)
+            self.record_row_map.append(i)
         
         self.lightning_table.setRowCount(0)
+        self.lightning_row_map = []
         lt_status_map = {
             "合格": "normal",
             "不合格": "error",
         }
         
-        for check in self.lightning_checks:
+        for i, check in enumerate(self.lightning_checks):
             row_data = [
                 check.id,
                 check.check_date,
@@ -187,6 +192,7 @@ class InspectionPage(BasePage):
                 check.status,
             ]
             self.add_table_row(self.lightning_table, row_data, status_col=7, status_type_map=lt_status_map)
+            self.lightning_row_map.append(i)
     
     def refresh_all(self):
         self._rebuild_stats()
@@ -230,16 +236,11 @@ class InspectionPage(BasePage):
     
     def _get_selected_record(self):
         current_row = self.table.currentRow()
-        if current_row < 0:
+        if current_row < 0 or current_row >= len(self.record_row_map):
             return None
-        visible_rows = [r for r in range(self.table.rowCount()) if not self.table.isRowHidden(r)]
-        sorted_visible = sorted(visible_rows)
-        if current_row in sorted_visible:
-            orig_idx = sorted_visible.index(current_row)
-            if orig_idx < len(self.records):
-                return self.records[orig_idx]
-        if current_row < len(self.records):
-            return self.records[current_row]
+        orig_idx = self.record_row_map[current_row]
+        if 0 <= orig_idx < len(self.records):
+            return self.records[orig_idx]
         return None
     
     def _on_add_inspection(self):
